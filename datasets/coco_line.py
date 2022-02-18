@@ -298,12 +298,46 @@ class CocoLine(torchvision.datasets.VisionDataset):
         X_cords = X_cords.flatten()
         Y_cords = Y_cords.flatten()
         bboxes = np.array((X_cords,Y_cords)).T
-
+        # temp_bboxes= []
+        # for bbox in bboxes:
+        #     if(bbox[0]<1 and bbox[1]<1 and bbox[0]>0 and bbox[1]>0):
+        #         temp_bboxes.append(bbox)
+        # for bbox in temp_bboxes:
+        #     if(bbox[0]>=1 or bbox[0]<0):
+        #         print("dum")
+        #     if(bbox[1]>=1 or bbox[1]<0):
+        #         print("dum")
+        # bboxes = np.array(temp_bboxes)
+        # temp_bboxes = bboxes
+        temp1 = bboxes>0
+        temp2 = bboxes<1
+        z_ind = np.where(np.sum(temp1*temp2,axis=1)!=2)
+        # z_ind = np.where(bboxes==[0.0,0.0])
+        bboxes = np.delete(list(bboxes),list(z_ind[0]),axis=0)
         if(bboxes.shape[0]<64):
+            # print("!!")
+            mask = np.vstack((np.ones((bboxes.shape[0],2)),np.zeros((64-bboxes.shape[0],2))))
+            mask_len = bboxes.shape[0]
             bboxes = np.vstack((bboxes,np.zeros((64-bboxes.shape[0],2))))
-        if(bboxes.shape[0]>64):
+        elif(bboxes.shape[0]>=64):
+            mask = np.ones((64,2))
+            mask_len = bboxes.shape[0]
             bboxes = bboxes[:64]
-        
+            
+        ten = np.array([0.0,0.0])
+        temp1=0
+        temp2 = 0
+        for i in mask:
+            if((i==ten).all()):
+                temp1+=1
+        for i in bboxes:
+            if((i==ten).all()):
+                temp2+=1
+        if(temp1!=temp2):
+            print(temp1,temp2)
+
+
+            
         # print(bboxes.shape)
         # exit()
 
@@ -327,16 +361,25 @@ class CocoLine(torchvision.datasets.VisionDataset):
         # image -= self.mean
         # image /= self.std
         image = image.transpose((2, 0, 1))  # [H, W, C] to [C, H, W]
-
-
         
+
+
+
+
+        l=[]
+        for char in image_file:
+            l.append(ord(char))
+        image_file_arr = np.array(l)
         target = {
             'image':torch.tensor(image, dtype=torch.float32),
             'size': torch.tensor(list(self.image_size)),
             'orig_size': torch.tensor([width, height]),
             'image_id': torch.tensor([db_rec['image_id']], dtype=torch.int64),
             'bboxes': torch.as_tensor(bboxes, dtype=torch.float32),
-            'labels': np.arange(1)
+            'labels': np.arange(1),
+            'masks':mask,
+            'mask_len':mask_len,
+            'image_file':image_file_arr
         }
 
         # img = Image.fromarray(image)
@@ -473,8 +516,8 @@ def build(image_set, args):
     assert root.exists(), f'provided COCO path {root} does not exist'
 
     PATHS = {
-        "train": ('/home/md.hassan/charts/ChartIE/PE-former/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_train2019.json'),
-        "val": ('/home/md.hassan/charts/ChartIE/PE-former/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_val2019.json'),
+        "train": ('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_train2019.json'),
+        "val": ('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_val2019.json'),
     }
 
     ann_file = PATHS[image_set]

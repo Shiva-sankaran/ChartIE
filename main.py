@@ -17,8 +17,8 @@ from losses import SetCriterion
 import numpy as np
 
 torch.cuda.set_device(1)
-os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '29500'
+# os.environ['MASTER_ADDR'] = 'localhost'
+# os.environ['MASTER_PORT'] = '29500'
 
 LOCAL_RANK = 1
 DATA_DIR = "/home/vp.shivasan/data/data/ChartOCR_lines"
@@ -108,12 +108,12 @@ parser.add_argument('--eos_coef', default=0.1, type=float,
 
 # dataset parameters
 parser.add_argument('--dataset_file', default='coco')
-parser.add_argument('--coco_path', default="/home/md.hassan/charts/ChartIE/PE-former/data/ChartOCR_lines/line/images", type=str)
+parser.add_argument('--coco_path', default="/home/vp.shivasan/data/data/ChartOCR_lines/line/images", type=str)
 
 parser.add_argument('--seed', default=42, type=int)
 
 parser.add_argument('--eval', action='store_true')
-parser.add_argument('--use_det_bbox', action='store_true', help='For keypoints detection, use person detected \
+parser.add_argument('--use_det_bbox', action='store_true', help='For keypoints detecti8on, use person detected \
                     bboxes (from json file) for evaluation')
 parser.add_argument('--scale_factor', default=0.3, type=float, help="Augmentation scaling parameter \
                                                         (default from simple baselines is %(default)s)")
@@ -123,12 +123,20 @@ parser.add_argument('--lr_step', type=int, default=10)
 parser.add_argument('--save_interval', type=int, default=5000)
 parser.add_argument('--log_interval', type=int, default=1000)
 parser.add_argument('--val_interval', type=int, default=2500)
+parser.add_argument('--local_rank', type=int, default=1)
+parser.add_argument('--lr_decay', type=int, default=10)
+
 
 args = parser.parse_args()
 os.chdir(ROOT_DIR)
-
+def remove_items(test_list, item):
+      
+    # using list comprehension to perform the task
+    res = [i for i in test_list if i != item]
+  
+    return res
 def main(args):
-    if(LOCAL_RANK == 0):
+    if(LOCAL_RANK == 1):
         writer = SummaryWriter(DATA_DIR + '/tensorboard/' + LOG_NAME)
     iter = 0
     epoch = None
@@ -140,6 +148,7 @@ def main(args):
         torch.cuda.set_device(LOCAL_RANK)
         dist.init_process_group(backend='nccl', init_method='env://',
                             world_size=num_gpus, rank=LOCAL_RANK)
+        print("DIST IS RUNNING")
     
     else:
         CUDA_ = 'cuda:1'
@@ -220,6 +229,7 @@ def main(args):
         enc_dec_model = nn.parallel.DistributedDataParallel(enc_dec_model,
                                                 device_ids=[LOCAL_RANK, ],
                                                 output_device=LOCAL_RANK)
+        print("MODEL IN DIST")
     else:
     # comment this for single GPU
     # model = nn.DataParallel(model).to(cfg.device)
@@ -233,7 +243,7 @@ def main(args):
             for k in batch:
                 batch[k] = batch[k].to(device=DEVICE, non_blocking=True)
 
-            if LOCAL_RANK == 0 and epoch >= args.epochs:
+            if LOCAL_RANK == 1 and epoch >= args.epochs:
                 state = {
                 'iter': iter,
                 'epoch': epoch,
@@ -257,11 +267,19 @@ def main(args):
             criterion= SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
             targets = []
-            for elem in batch["bboxes"]:
-                targets.append({"bboxes":elem,"labels":np.arange(1)})
-            loss_dict = criterion(outputs,targets )
+            i = 0
+         
+            for idx in range(len(batch["bboxes"])):
+                elem = batch["bboxes"][idx]
+                mask = batch["masks"][idx]
+                mask_len = batch["mask_len"][idx]
+                targets.append({"bboxes":elem,"mask":mask,"labels":np.arange(1),"mask_len":mask_len})
+                i+=1
+            loss_dict = criterion(outputs,targets)
+
             del outputs
             loss = loss_dict["loss_bbox"]
+            writer.add_scalar('loss', loss.item(), iter)
             epoch_loss+=loss
             loss = loss.unsqueeze(0)
             optimizer.zero_grad()
@@ -269,17 +287,17 @@ def main(args):
             optimizer.step()
 
             if epoch > 0 and epoch % args.lr_step == 0:
-                if optimizer.param_groups[0]["lr"] !=args.lr / (args.lr_drop) ** (epoch // args.lr_step):
+                if optimizer.param_groups[0]["lr"] !=args.lr / (args.lr_decay) ** (epoch // args.lr_step):
                     optimizer = decay_lr(optimizer, args.lr_decay, epoch, iter)
                     print(optimizer.param_groups[0]["lr"])
-            if LOCAL_RANK == 0 and iter % args.save_interval == 0:
+            if LOCAL_RANK == 1 and iter % args.save_interval == 0:
                 state = {
                 'iter': iter,
                 'epoch': epoch,
                 'state_dict': enc_dec_model.module.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 }
-                torch.save(state, args.save_path_base + '/line_' + str(epoch) + "_" + str(iter) + "_ckpt.t7")
+                torch.save(state, SAVE_PATH_BASE+ '/line_' + str(epoch) + "_" + str(iter) + "_ckpt.t7")
 
             if iter % args.log_interval == 0:
                 state = {
@@ -288,10 +306,10 @@ def main(args):
                 'state_dict': enc_dec_model.module.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 }
-                if LOCAL_RANK == 0: # log and save only one model from all GPUs
+                if LOCAL_RANK == 1: # log and save only one model from all GPUs
                     torch.save(state, SAVE_PATH_BASE + '/line_latest_ckpt.t7')
                     
-                    writer.add_scalar('loss', loss.item(), epoch)
+                    # writer.add_scalar('loss', loss.item(), epoch)
                 duration = time.perf_counter() - tic
                 tic = time.perf_counter()
                 # print('[%d/%d-%d/%d] iteration: %d  ' % (epoch, args.epochs, batch_idx, len(train_loader), iter) +
@@ -304,8 +322,9 @@ def main(args):
                 enc_dec_model.train()
             iter += 1
         epoch_loss/=len(train_loader)
-        scheduler.sttep(epoch_loss)
+        scheduler.step(epoch_loss)
         print("Epoch:%d"%(epoch)+"Epoch loss=%.5f"%(epoch_loss))
+        writer.add_scalar('Epoch loss', epoch_loss, epoch)
         return iter, optimizer
     def val(epoch, iter):
         print('\n%s Val@Epoch: %d, Iteration: %d' % (datetime.now(), epoch, iter))
@@ -365,3 +384,65 @@ def decay_lr(optimizer, lr_decay, epoch, iter):
 
 if __name__ == '__main__':
   main(args)
+
+
+
+
+
+
+# 2022-02-06 14:41:23.671739 Epoch: 1
+# Epoch:1Epoch loss=67.54978
+
+# 2022-02-06 14:50:53.518414 Epoch: 2
+# Epoch:2Epoch loss=67.49040
+
+# 2022-02-06 15:01:34.474513 Epoch: 3
+# Epoch:3Epoch loss=32.46452
+
+# 2022-02-06 15:12:16.634735 Epoch: 4
+# Epoch:4Epoch loss=432.30338
+
+# 2022-02-06 15:22:57.038235 Epoch: 5
+# Epoch:5Epoch loss=65.55044
+
+# 2022-02-06 15:33:37.594022 Epoch: 6
+# Epoch:6Epoch loss=101.41268
+
+# 2022-02-06 15:44:18.417893 Epoch: 7
+# Epoch:7Epoch loss=48.91854
+
+# 2022-02-06 15:53:25.636885 Epoch: 8
+# Epoch:8Epoch loss=37.83684
+
+# 2022-02-06 16:04:07.908046 Epoch: 9
+# Epoch:9Epoch loss=70.16045
+
+# 2022-02-06 16:14:50.991546 Epoch: 10
+# 2022-02-06 18:07:22.278058 Epoch: 11
+# Epoch:11Epoch loss=451.70132
+
+# 2022-02-06 18:15:40.146453 Epoch: 12
+# Epoch:12Epoch loss=34.61289
+
+# 2022-02-06 18:23:56.694974 Epoch: 13
+# Epoch:13Epoch loss=49.07185
+
+# 2022-02-06 18:32:13.255877 Epoch: 14
+# Epoch    14: reducing learning rate of group 0 to 1.0000e-06.
+# Epoch    14: reducing learning rate of group 1 to 1.0000e-07.
+# Epoch:14Epoch loss=93.37928
+
+# 2022-02-06 18:40:31.268783 Epoch: 15
+# Epoch:15Epoch loss=41.78336
+
+# 2022-02-06 18:48:49.370239 Epoch: 16
+# Epoch:16Epoch loss=57.42586
+
+# 2022-02-06 18:57:06.866768 Epoch: 17
+# Epoch:17Epoch loss=59.32842
+
+# 2022-02-06 19:05:23.913671 Epoch: 18
+# Epoch:18Epoch loss=43.99925
+
+# 2022-02-06 19:13:42.002991 Epoch: 19
+# Epoch:19Epoch loss=89.89934

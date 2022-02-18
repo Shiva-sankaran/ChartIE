@@ -69,7 +69,7 @@ class HungarianMatcher(nn.Module):
         # cost_class = -out_prob[:, tgt_ids]
 
         # Compute the L1 cost between boxes
-        cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+        cost_bbox = torch.cdist(out_bbox, tgt_bbox.type(torch.DoubleTensor).cuda(), p=1)
 
         # Compute the giou cost betwen boxes
         cost_giou = 0.0
@@ -78,7 +78,7 @@ class HungarianMatcher(nn.Module):
 
         # Final cost matrix
         # C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
-        C = self.cost_bbox * cost_bbox + self.cost_giou * cost_giou
+        C = cost_bbox + self.cost_giou * cost_giou
         C = C.view(bs, num_queries, -1).cpu()
 
         sizes = [v["bboxes"].shape[0] for v in targets]

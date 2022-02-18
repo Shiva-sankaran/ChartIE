@@ -1,9 +1,12 @@
+from numpy import delete
 import torch
 import torch.nn.functional as F
 from util.misc import (NestedTensor, accuracy, get_world_size,
                        is_dist_avail_and_initialized)
 from torch import nn
+import numpy as np
 
+    
 class SetCriterion(nn.Module):
     """ This class computes the loss for DETR.
     The process happens in two steps:
@@ -76,9 +79,17 @@ class SetCriterion(nn.Module):
         target_boxes = torch.cat([t['bboxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-
+        ten = torch.as_tensor([0,0],dtype=torch.float64).cuda()
+        t=0
+        for i in target_boxes:
+            if((i==ten).any()):
+                t+=1
+        t = len(target_boxes)-t
         losses = {}
-        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+        losses['loss_bbox'] = loss_bbox.sum() / (t)
+        #print(losses['loss_bbox'])
+        if(losses['loss_bbox']>20):
+            dummy=1
 
         return losses
 
@@ -110,9 +121,43 @@ class SetCriterion(nn.Module):
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
+        # my_list = targets
+        # for i in range(len(targets)):
+        #     temp_list = []
+        #     for point in targets[i]["bboxes"]:
+        #         if(point.tolist() !=[0,0]):
+        #             delete
+        #     my_list[i] = temp_list
+        # targets = my_list
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
+        pred_boxes = outputs_without_aux['pred_boxes']
+        l = []
+        for i in range(len(targets)):
+            l.append(targets[i]['mask'].cpu())
+        np_l = [t.numpy() for t in l]
+        mask_t = torch.as_tensor(np.array(np_l))
+        mask_t = mask_t.cuda()
+        outputs_without_aux['pred_boxes'] = (mask_t*pred_boxes).double()
+        outputs['pred_boxes'] = (mask_t*pred_boxes).double()
         # print("!!!!!!!!!!!!",targets[0]["bboxes"].shape)
         # Retrieve the matching between the outputs of the last layer and the targets
+        ten = torch.as_tensor([0,0],dtype=torch.float64).cuda()
+        
+        for i in range(42):
+            t=0
+            t1=0
+            t2=0
+            for j in outputs["pred_boxes"][i]:
+                if((j==ten).all()):
+                    t+=1
+            for j in targets[i]["bboxes"]:
+                if((j==ten).all()):
+                    t1+=1
+            for j in outputs_without_aux["pred_boxes"][i]:
+                if((j==ten).all()):
+                    t2+=1
+            if(t1!=t or t1!=t2 or t!=t2):
+                print(t,t1,t2)
         indices = self.matcher(outputs_without_aux, targets)
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
