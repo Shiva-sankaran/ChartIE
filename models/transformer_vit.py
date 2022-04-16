@@ -76,17 +76,17 @@ class TransformerVit(nn.Module):
                 # print("Initializing ", n, p.dim())
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src: torch.Tensor, query_embed):
+    def forward(self, src: torch.Tensor, query_embed,return_attn = False):
         # flatten NxCxHxW to HWxNxC
 
         # Src should be Bs, 3, 224, 224
         # print("SRC SHAPE ", src.shape)
         bs, c, h, w = src.shape
         if type(self.encoder) == torch.nn.Sequential:
-            memory = self.encoder(src)
+            memory,attn_list = self.encoder(src)
             memory = memory.permute(0, 2, 1)  # send channels last
         else:
-            memory = self.encoder(src, cls_only=False)
+            memory,attn_list = self.encoder(src,return_attn, cls_only=False)
 
         # print("Memory shape ", memory.shape)
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
@@ -134,103 +134,133 @@ class TransformerVit(nn.Module):
                           pos=pos_embed, query_pos=query_embed)
 
         # XXX memory is expected permuted by the decoder
-        return hs.transpose(1, 2), memory.permute(1, 0, 2)
+        return hs.transpose(1, 2), memory.permute(1, 0, 2),attn_list
 
 
-def create_resnet_encoder(args):
-    model = create_model("resnet50", num_classes=0, pretrained=True)
+# def create_resnet_encoder(args):
+#     model = create_model("resnet50", num_classes=0, pretrained=True)
 
-    # Remove global_pool. We need all the features.
-    model.global_pool = torch.nn.Identity()
+#     # Remove global_pool. We need all the features.
+#     model.global_pool = torch.nn.Identity()
 
-    # Following DETR code: Only train layers 2,3,4.
-    # TODO Test with frozenBN
-    # for name, parameter in model.named_parameters():
-    #     if name not in ['layer2', 'layer3', 'layer4']:
-    #         parameter.requires_grad_(False)
+#     # Following DETR code: Only train layers 2,3,4.
+#     # TODO Test with frozenBN
+#     # for name, parameter in model.named_parameters():
+#     #     if name not in ['layer2', 'layer3', 'layer4']:
+#     #         parameter.requires_grad_(False)
 
-    # Apply a 1x1 conv to reduce the channels if needed
-    input_proj = nn.Conv2d(model.num_features, args.vit_dim, kernel_size=1)
+#     # Apply a 1x1 conv to reduce the channels if needed
+#     input_proj = nn.Conv2d(model.num_features, args.vit_dim, kernel_size=1)
 
-    encoder = torch.nn.Sequential(model, input_proj, torch.nn.Flatten(2))
-    encoder.num_channels = args.vit_dim
+#     encoder = torch.nn.Sequential(model, input_proj, torch.nn.Flatten(2))
+#     encoder.num_channels = args.vit_dim
 
-    print(f"Encoder.num_channels {encoder.num_channels}")
+#     print(f"Encoder.num_channels {encoder.num_channels}")
 
-    return encoder
+#     return encoder
 
 
 def build_transformer_vit(args):
 
     patch_size = args.patch_size
-    if "xcit_" not in args.vit_arch and args.vit_arch != "resnet50":
-    # Initialize VIT
-        if "_tiny" in args.vit_arch:
-            encoder = vision_transformer.deit_tiny(patch_size=patch_size, img_size=args.input_size)
-        else:
-            encoder = vision_transformer.deit_small(patch_size=patch_size, img_size=args.input_size)
-
-        encoder.dim_patches = [encoder.patch_embed.img_size[0] // encoder.patch_embed.patch_size[0],
-                               encoder.patch_embed.img_size[1] // encoder.patch_embed.patch_size[1]]
-
-        load_pretrained_weights_vit(encoder, args.vit_weights,
-                                    checkpoint_key="teacher", model_name=args.vit_arch, patch_size=patch_size)
-
-    elif "xcit_" in args.vit_arch:
-        encoder = create_model(args.vit_arch,
+    encoder = create_model("xcit_small_12_p16",
                                pretrained=False,
                                num_classes=0,
                                img_size=args.input_size,
                                drop_rate=args.vit_dropout,
                                drop_block_rate=None)
 
-        encoder.dim_patches = [encoder.patch_embed.img_size[0] // encoder.patch_embed.patch_size[0],
+    encoder.dim_patches = [encoder.patch_embed.img_size[0] // encoder.patch_embed.patch_size[0],
                                encoder.patch_embed.img_size[1] // encoder.patch_embed.patch_size[1]]
 
         # Load weights here
-        if args.vit_weights is not None:
-            if args.vit_weights.startswith('https'):
-                checkpoint = torch.hub.load_state_dict_from_url(
-                    args.vit_weights, map_location='cpu', check_hash=True)
-            else:
-                checkpoint = torch.load(args.vit_weights, map_location='cpu')
+    if args.vit_weights is not None:
+        if args.vit_weights.startswith('https'):
+            checkpoint = torch.hub.load_state_dict_from_url(
+                args.vit_weights, map_location='cpu', check_hash=True)
+        else:
+            checkpoint = torch.load(args.vit_weights, map_location='cpu')
+        
+        checkpoint_model = checkpoint['model']
+        # print(checkpoint['model'].keys())
+        msg = encoder.load_state_dict(checkpoint_model, strict=False)
+        print(f"Loaded encoder weights from {args.vit_weights}. Message: {msg}")
+    
+    decoder_layer = TransformerDecoderLayer(args.hidden_dim, args.nheads, args.dim_feedforward,
+                                                args.dropout, args.activation, args.pre_norm)
+    decoder_norm = nn.LayerNorm(args.hidden_dim)
+    decoder = TransformerDecoder(decoder_layer, args.dec_layers, decoder_norm,
+                                    return_intermediate=True)
+
+
+    # if "xcit_" not in args.vit_arch and args.vit_arch != "resnet50":
+    # # Initialize VIT
+    #     if "_tiny" in args.vit_arch:
+    #         encoder = vision_transformer.deit_tiny(patch_size=patch_size, img_size=args.input_size)
+    #     else:
+    #         encoder = vision_transformer.deit_small(patch_size=patch_size, img_size=args.input_size)
+
+    #     encoder.dim_patches = [encoder.patch_embed.img_size[0] // encoder.patch_embed.patch_size[0],
+    #                            encoder.patch_embed.img_size[1] // encoder.patch_embed.patch_size[1]]
+
+    #     load_pretrained_weights_vit(encoder, args.vit_weights,
+    #                                 checkpoint_key="teacher", model_name=args.vit_arch, patch_size=patch_size)
+
+    # elif "xcit_" in args.vit_arch:
+    #     encoder = create_model(args.vit_arch,
+    #                            pretrained=False,
+    #                            num_classes=0,
+    #                            img_size=args.input_size,
+    #                            drop_rate=args.vit_dropout,
+    #                            drop_block_rate=None)
+
+    #     encoder.dim_patches = [encoder.patch_embed.img_size[0] // encoder.patch_embed.patch_size[0],
+    #                            encoder.patch_embed.img_size[1] // encoder.patch_embed.patch_size[1]]
+
+    #     # Load weights here
+    #     if args.vit_weights is not None:
+    #         if args.vit_weights.startswith('https'):
+    #             checkpoint = torch.hub.load_state_dict_from_url(
+    #                 args.vit_weights, map_location='cpu', check_hash=True)
+    #         else:
+    #             checkpoint = torch.load(args.vit_weights, map_location='cpu')
             
-            checkpoint_model = checkpoint['model']
-            # print(checkpoint['model'].keys())
-            msg = encoder.load_state_dict(checkpoint_model, strict=False)
-            print(f"Loaded encoder weights from {args.vit_weights}. Message: {msg}")
+    #         checkpoint_model = checkpoint['model']
+    #         # print(checkpoint['model'].keys())
+    #         msg = encoder.load_state_dict(checkpoint_model, strict=False)
+    #         print(f"Loaded encoder weights from {args.vit_weights}. Message: {msg}")
 
-    elif "resnet50" == args.vit_arch:
-        encoder = create_resnet_encoder(args)
-        # Load weights here
-        if args.vit_weights is not None:
-            if args.vit_weights.startswith('https'):
-                checkpoint = torch.hub.load_state_dict_from_url(
-                    args.vit_weights, map_location='cpu', check_hash=True)
-            else:
-                checkpoint = torch.load(args.vit_weights, map_location='cpu')
+    # elif "resnet50" == args.vit_arch:
+    #     encoder = create_resnet_encoder(args)
+    #     # Load weights here
+    #     if args.vit_weights is not None:
+    #         if args.vit_weights.startswith('https'):
+    #             checkpoint = torch.hub.load_state_dict_from_url(
+    #                 args.vit_weights, map_location='cpu', check_hash=True)
+    #         else:
+    #             checkpoint = torch.load(args.vit_weights, map_location='cpu')
 
-            msg = encoder[0].load_state_dict(checkpoint, strict=False)
-            print(f"Loaded resnet50 encoder weights from {args.vit_weights}. Message: {msg}")
+    #         msg = encoder[0].load_state_dict(checkpoint, strict=False)
+    #         print(f"Loaded resnet50 encoder weights from {args.vit_weights}. Message: {msg}")
 
 
-        # XXX This is the output features size for
-        # resnet50. Resnet50 Downsamples the input by 32
-        encoder.dim_patches = [args.input_size[0] // 32,
-                               args.input_size[1] // 32]
+    #     # XXX This is the output features size for
+    #     # resnet50. Resnet50 Downsamples the input by 32
+    #     encoder.dim_patches = [args.input_size[0] // 32,
+    #                            args.input_size[1] // 32]
 
     #  Prepare Decoder
-    if args.dec_arch == "detr":
-        decoder_layer = TransformerDecoderLayer(args.hidden_dim, args.nheads, args.dim_feedforward,
-                                                args.dropout, args.activation, args.pre_norm)
-        decoder_norm = nn.LayerNorm(args.hidden_dim)
-        decoder = TransformerDecoder(decoder_layer, args.dec_layers, decoder_norm,
-                                     return_intermediate=True)
-    elif args.dec_arch == "xcit":
-        decoder = XCiTDec(args.hidden_dim, args.dec_layers, args.nheads, dim_feedforward=args.dim_feedforward,
-                          attn_drop_rate=args.dropout, return_intermediate=True,
-                          dim_patches=encoder.dim_patches, with_lpi=args.with_lpi,
-                          num_queries=args.num_queries)
+    # if args.dec_arch == "detr":
+    #     decoder_layer = TransformerDecoderLayer(args.hidden_dim, args.nheads, args.dim_feedforward,
+    #                                             args.dropout, args.activation, args.pre_norm)
+    #     decoder_norm = nn.LayerNorm(args.hidden_dim)
+    #     decoder = TransformerDecoder(decoder_layer, args.dec_layers, decoder_norm,
+    #                                  return_intermediate=True)
+    # elif args.dec_arch == "xcit":
+    #     decoder = XCiTDec(args.hidden_dim, args.dec_layers, args.nheads, dim_feedforward=args.dim_feedforward,
+    #                       attn_drop_rate=args.dropout, return_intermediate=True,
+    #                       dim_patches=encoder.dim_patches, with_lpi=args.with_lpi,
+    #                       num_queries=args.num_queries)
 
     return TransformerVit(
         encoder=encoder,

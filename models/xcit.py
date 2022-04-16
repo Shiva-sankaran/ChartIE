@@ -17,6 +17,7 @@ from timm.models.registry import register_model
 from timm.models.layers import DropPath, trunc_normal_, to_2tuple
 
 
+
 class PositionalEncodingFourier(nn.Module):
     """
     Positional encoding relying on a fourier kernel matching the one used in the
@@ -156,7 +157,7 @@ class ClassAttention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x):
+    def forward(self, x,return_attn = False):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
         qkv = qkv.permute(2, 0, 3, 1, 4)
@@ -170,7 +171,10 @@ class ClassAttention(nn.Module):
         cls_tkn = (attn_cls.unsqueeze(2) @ v).transpose(1, 2).reshape(B, 1, C)
         cls_tkn = self.proj(cls_tkn)
         x = torch.cat([self.proj_drop(cls_tkn), x[:, 1:]], dim=1)
-        return x
+        if(return_attn):
+            return x,attn_cls
+        
+        return x,None
 
 
 class ClassAttentionBlock(nn.Module):
@@ -203,8 +207,10 @@ class ClassAttentionBlock(nn.Module):
         # FIXME: A hack for models pre-trained with layernorm over all the tokens not just the CLS
         self.tokens_norm = tokens_norm
 
-    def forward(self, x, H, W, mask=None):
-        x = x + self.drop_path(self.gamma1 * self.attn(self.norm1(x)))
+    def forward(self, x, H, W,return_attn = False,):
+        temp = self.attn(self.norm1(x),return_attn)
+        attn = temp[1]
+        x = x + self.drop_path(self.gamma1 * temp[0])
         if self.tokens_norm:
             x = self.norm2(x)
         else:
@@ -215,7 +221,7 @@ class ClassAttentionBlock(nn.Module):
         cls_token = self.gamma2 * self.mlp(cls_token)
         x = torch.cat([cls_token, x[:, 1:]], dim=1)
         x = x_res + self.drop_path(x)
-        return x
+        return x,attn
 
 
 class XCA(nn.Module):
@@ -234,7 +240,7 @@ class XCA(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x):
+    def forward(self, x,return_attn = False):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
         qkv = qkv.permute(2, 0, 3, 1, 4)
@@ -254,7 +260,9 @@ class XCA(nn.Module):
         x = (attn @ v).permute(0, 3, 1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x
+        if(return_attn):
+            return x,attn
+        return x,None
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -285,11 +293,13 @@ class XCABlock(nn.Module):
         self.gamma2 = nn.Parameter(eta * torch.ones(dim), requires_grad=True)
         self.gamma3 = nn.Parameter(eta * torch.ones(dim), requires_grad=True)
 
-    def forward(self, x, H, W):
-        x = x + self.drop_path(self.gamma1 * self.attn(self.norm1(x)))
+    def forward(self, x, H, W,return_attn = False):
+        temp = self.attn(self.norm1(x),return_attn)
+        attn = temp[1]
+        x = x + self.drop_path(self.gamma1 * temp[0])
         x = x + self.drop_path(self.gamma3 * self.local_mp(self.norm3(x), H, W))
         x = x + self.drop_path(self.gamma2 * self.mlp(self.norm2(x)))
-        return x
+        return x,attn
 
 
 class XCiT(nn.Module):
@@ -374,9 +384,10 @@ class XCiT(nn.Module):
     def no_weight_decay(self):
         return {'pos_embed', 'cls_token', 'dist_token'}
 
-    def forward_features(self, x, cls_only=True):
-        B, C, H, W = x.shape
+    def forward_features(self, x, cls_only=True,return_attn = False):
 
+        attn_list = []
+        B, C, H, W = x.shape
         x, (Hp, Wp) = self.patch_embed(x)
 
         if self.use_pos:
@@ -386,26 +397,31 @@ class XCiT(nn.Module):
         x = self.pos_drop(x)
 
         for blk in self.blocks:
-            x = blk(x, Hp, Wp)
+            x,attn = blk(x, Hp, Wp,return_attn)
+            attn_list.append(attn)
 
         cls_tokens = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
 
         for blk in self.cls_attn_blocks:
-            x = blk(x, Hp, Wp)
+            x,attn = blk(x, Hp, Wp,return_attn)
+            # attn_list.append(attn)
 
         x = self.norm(x)
 
         if cls_only:
             return x[:, 0]
         else:
-            return x
+            if(return_attn):
+                return x,attn_list
+            else:
+                return x,None
 
-    def forward(self, x, cls_only=True):
-        x = self.forward_features(x, cls_only)
+    def forward(self, x,return_attn, cls_only=True):
+        x,attn_list = self.forward_features(x, cls_only,return_attn)
         x = self.head(x)
+        return x,attn_list
 
-        return x
 
 
 # Patch size 16x16 models

@@ -30,7 +30,7 @@ class VITDETR(nn.Module):
 
 
 
-    def forward(self, samples):
+    def forward(self, samples,return_attn = False):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -50,9 +50,7 @@ class VITDETR(nn.Module):
         # features, pos = self.backbone(samples)
         # src, mask = features[-1].decompose()
         # assert mask is not None
-
-        hs = self.transformer(samples, self.query_embed.weight)[0]
-        
+        hs,_,attn_list = self.transformer(samples, self.query_embed.weight,return_attn)
         # TODO: For inference only the last transformer block is used (hs[-1])
         # For calculating the loss all blocks are needed.
         # It will save some flops to only pass the MLPs from the last block for inference
@@ -61,7 +59,10 @@ class VITDETR(nn.Module):
         # outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
         out = {'pred_boxes': outputs_coord[-1]}
+       
         return out
+        
+        
 
 
 class MLP(nn.Module):
@@ -87,6 +88,6 @@ class Model(nn.Module):
         transformer,
         num_queries=args.num_queries
     )
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, x,return_attn = False):
+        return self.model(x,return_attn)
     

@@ -5,6 +5,7 @@ from util.misc import (NestedTensor, accuracy, get_world_size,
                        is_dist_avail_and_initialized)
 from torch import nn
 import numpy as np
+from scipy.spatial import distance
 
     
 class SetCriterion(nn.Module):
@@ -13,7 +14,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
+    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses,alp):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -31,41 +32,21 @@ class SetCriterion(nn.Module):
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
+        self.alpha = alp
 
-    # def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
-    #     """Classification loss (NLL)
-    #     targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+    # @torch.no_grad()
+    # def loss_cardinality(self, outputs, targets, indices, num_boxes):
+    #     """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
+    #     This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
     #     """
-    #     assert 'pred_logits' in outputs
-    #     src_logits = outputs['pred_logits']
-
-    #     idx = self._get_src_permutation_idx(indices)
-    #     target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
-    #     target_classes = torch.full(src_logits.shape[:2], self.num_classes,
-    #                                 dtype=torch.int64, device=src_logits.device)
-    #     target_classes[idx] = target_classes_o
-
-    #     loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
-    #     losses = {'loss_ce': loss_ce}
-
-    #     if log:
-    #         # TODO this should probably be a separate loss, not hacked in this one here
-    #         losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
+    #     pred_logits = outputs['pred_logits']
+    #     device = pred_logits.device
+    #     tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
+    #     # Count the number of predictions that are NOT "no-object" (which is the last class)
+    #     card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
+    #     card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
+    #     losses = {'cardinality_error': card_err}
     #     return losses
-
-    @torch.no_grad()
-    def loss_cardinality(self, outputs, targets, indices, num_boxes):
-        """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
-        This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
-        """
-        pred_logits = outputs['pred_logits']
-        device = pred_logits.device
-        tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
-        # Count the number of predictions that are NOT "no-object" (which is the last class)
-        card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
-        card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
-        losses = {'cardinality_error': card_err}
-        return losses
 
     def loss_keypoints(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the keypoints: the L1 regression loss.
@@ -76,9 +57,13 @@ class SetCriterion(nn.Module):
         assert 'pred_boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs['pred_boxes'][idx]
-        target_boxes = torch.cat([t['bboxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-
+        target_boxes = torch.cat([t['bboxes'][i] for t, (_, i) in zip(targets, indices)], dim=0).type(torch.float64)
+        anchor_boxes = torch.cat([t['anchors'][i] for t, (_, i) in zip(targets, indices)], dim=0).type(torch.float64)
+        ang_loss = self.angular_loss(src_boxes,target_boxes,anchor_boxes)
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+        loss_bbox = loss_bbox.sum(axis=1)
+        l1_loss = loss_bbox
+        loss_bbox = loss_bbox*self.alpha + (1-self.alpha)*ang_loss
         ten = torch.as_tensor([0,0],dtype=torch.float64).cuda()
         t=0
         for i in target_boxes:
@@ -87,23 +72,46 @@ class SetCriterion(nn.Module):
         t = len(target_boxes)-t
         losses = {}
         losses['loss_bbox'] = loss_bbox.sum() / (t)
+        losses['l1_loss'] = l1_loss.sum()/(t)
+        losses['ang_loss'] = ang_loss.sum()/(t)
         #print(losses['loss_bbox'])
         if(losses['loss_bbox']>20):
             dummy=1
 
         return losses
 
+    def angular_loss(self,pred_boxes,ground_boxes,anchor_boxes):
+        ground_vector = (ground_boxes-anchor_boxes) 
+        pred_vector = (pred_boxes - anchor_boxes)  
+        # ground_vector = torch.unsqueeze(ground_vector,0)
+        # pred_vector = torch.unsqueeze(pred_vector,0)
+        cos = nn.CosineSimilarity(dim = 1,eps =1e-6)
+        ang_loss = 1-cos(ground_vector,pred_vector)
+        return ang_loss
+
+    def get_anchor_point(ground_point):
+        r = 5
+        thetha = np.pi/6
+        angles = np.arange(0,2*np.pi+0.0001,thetha)
+        cosines = np.cos(angles)
+        sines = np.sin(angles)
+        x,y = ground_point
+        x_new = x+ r*cosines 
+        y_new = y + r*sines
+
+        
+        return x_new,y_new
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
         src_idx = torch.cat([src for (src, _) in indices])
         return batch_idx, src_idx
 
-    def _get_tgt_permutation_idx(self, indices):
-        # permute targets following indices
-        batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
-        tgt_idx = torch.cat([tgt for (_, tgt) in indices])
-        return batch_idx, tgt_idx
+    # def _get_tgt_permutation_idx(self, indices):
+    #     # permute targets following indices
+    #     batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
+    #     tgt_idx = torch.cat([tgt for (_, tgt) in indices])
+    #     return batch_idx, tgt_idx
 
     def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
         loss_map = {
@@ -121,14 +129,6 @@ class SetCriterion(nn.Module):
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
-        # my_list = targets
-        # for i in range(len(targets)):
-        #     temp_list = []
-        #     for point in targets[i]["bboxes"]:
-        #         if(point.tolist() !=[0,0]):
-        #             delete
-        #     my_list[i] = temp_list
-        # targets = my_list
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
         pred_boxes = outputs_without_aux['pred_boxes']
         l = []
@@ -167,26 +167,11 @@ class SetCriterion(nn.Module):
             torch.distributed.all_reduce(num_boxes)
         num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
 
-        # Compute all the requested losses
         losses = {}
         for loss in self.losses:
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
 
-        # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
-        # if 'aux_outputs' in outputs:
-        #     for i, aux_outputs in enumerate(outputs['aux_outputs']):
-        #         indices = self.matcher(aux_outputs, targets)
-        #         for loss in self.losses:
-        #             if loss == 'masks':
-        #                 # Intermediate masks losses are too costly to compute, we ignore them.
-        #                 continue
-        #             kwargs = {}
-        #             if loss == 'labels':
-        #                 # Logging is enabled only for the last layer
-        #                 kwargs = {'log': False}
-        #             l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
-        #             l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
-        #             losses.update(l_dict)
-
         return losses
+
+
 

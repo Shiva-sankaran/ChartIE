@@ -7,12 +7,15 @@ https://github.com/microsoft/human-pose-estimation.pytorch/tree/master/lib/datas
 
 """
 
+from curses import KEY_UNDO
+from tkinter import Y
 import torch
 import torchvision
 from pathlib import Path
 import copy
 import cv2
 import random
+import matplotlib.pyplot as plt
 
 from util.sb_transforms import fliplr_joints, affine_transform, get_affine_transform
 
@@ -219,6 +222,7 @@ class CocoLine(torchvision.datasets.VisionDataset):
     def __init__(self, root, ann_file, image_set, transforms=None, is_train=False,
                  input_size=(224, 224), scale_factor=0.3):
         super().__init__(root)
+        self.calculate_anchors = True
         self.image_set = image_set
         self.is_train = is_train
         self.image_size = input_size
@@ -227,10 +231,18 @@ class CocoLine(torchvision.datasets.VisionDataset):
         self.image_set_index = self.coco.getImgIds()
 
         self.db = self._get_db()
+        self.anchor_db = {}
+        
 
     def __getitem__(self, idx):
         db_rec = copy.deepcopy(self.db[idx])
-        image_file = str(self.root) + '/' + self.image_set + '2019/' + str(db_rec['file_name'])
+        if(self.image_set == "train"):
+            image_file = str(self.root) + '/'  + str(db_rec['file_name'])
+            
+        else:
+            image_file = str(self.root) + '/' + self.image_set + '2019/' + str(db_rec['file_name'])
+            
+        
 
         image  = cv2.imread(image_file)
         height, width, _ = image.shape
@@ -238,45 +250,6 @@ class CocoLine(torchvision.datasets.VisionDataset):
         image = np.asarray(image)
 
         bboxes = db_rec['objs']
-
-        # print(db_rec)
-        # bboxes = np.array([anno['bbox'] for anno in annotations])
-
-        # for ind_bbox in range(len(bboxes)):   #if in the same chart, one line has more points... 
-        # if len(bboxes[ind_bbox]) < max_len: #then pad others to match length.CAUSES PREDICTIONS @ORIGIN?
-        #     bboxes[ind_bbox] = np.pad(bboxes[ind_bbox], (0, max_len - len(bboxes[ind_bbox])), 'constant',
-        #                             constant_values=(0, 0))
-        # bboxes = np.array(bboxes, dtype=float)
-
-        # SKIPPING CROPS FOR NOW!!
-
-        # random crop (for training) or center crop (for validation)
-        # if self.split == 'train':
-        #     image, bboxes, scale = random_crop_line(data_numpy, # function from ChartOCR, some extra functionality
-        #                                 bboxes,
-        #                                 random_scales=self.rand_scales,
-        #                                 view_size=self.img_size,
-        #                                 border=self.padding)
-        # else:
-        #     image, border, _ = crop_image(data_numpy,
-        #                                         center=[data_numpy.shape[0] // 2, data_numpy.shape[1] // 2],
-        #                                         new_size=[max(data_numpy.shape[0:2]), max(data_numpy.shape[0:2])])
-        # bboxes[:, 0::2] += border[2]
-        # bboxes[:, 1::2] += border[0]
-
-        # # resize image and bbox
-        # height, width = image.shape[:2]
-        # image = cv2.resize(image, (self.img_size['w'], self.img_size['h']))
-
-        # for i in range(len(bboxes)):   #if in the same chart, one line has more points... 
-        #     if len(bboxes[i]) < 128: #then pad others to match length.CAUSES PREDICTIONS @ORIGIN?
-        #         bboxes[i] = np.pad(bboxes[i], (0, 128 - len(bboxes[i])), 'constant',
-        #                           constant_values=(0, 0))
-        #     if(len(bboxes[i])>128):
-        #         bboxes[i]=bboxes[i][:128] 
-            
-        
-
         bboxes = [bbox.tolist() for bbox in bboxes]
 
         m = 0
@@ -287,35 +260,18 @@ class CocoLine(torchvision.datasets.VisionDataset):
             if len(bboxes[ind_bbox]) < max_len: #then pad others to match length.CAUSES PREDICTIONS @ORIGIN?
                 bboxes[ind_bbox] = np.pad(bboxes[ind_bbox], (0, max_len - len(bboxes[ind_bbox])), 'constant',
                                         constant_values=(0, 0))
-        # print(np.array(bboxes).shape)
-        # exit()
+
         bboxes = np.array(bboxes)
-        # try:
         X_cords = bboxes[:, 0::2] *( 1 / width)
-        # except:
-            # print(image_file)
         Y_cords = bboxes[:, 1::2] *( 1 / height) # xy coords become 0 to 1
         X_cords = X_cords.flatten()
         Y_cords = Y_cords.flatten()
         bboxes = np.array((X_cords,Y_cords)).T
-        # temp_bboxes= []
-        # for bbox in bboxes:
-        #     if(bbox[0]<1 and bbox[1]<1 and bbox[0]>0 and bbox[1]>0):
-        #         temp_bboxes.append(bbox)
-        # for bbox in temp_bboxes:
-        #     if(bbox[0]>=1 or bbox[0]<0):
-        #         print("dum")
-        #     if(bbox[1]>=1 or bbox[1]<0):
-        #         print("dum")
-        # bboxes = np.array(temp_bboxes)
-        # temp_bboxes = bboxes
         temp1 = bboxes>0
         temp2 = bboxes<1
         z_ind = np.where(np.sum(temp1*temp2,axis=1)!=2)
-        # z_ind = np.where(bboxes==[0.0,0.0])
         bboxes = np.delete(list(bboxes),list(z_ind[0]),axis=0)
         if(bboxes.shape[0]<64):
-            # print("!!")
             mask = np.vstack((np.ones((bboxes.shape[0],2)),np.zeros((64-bboxes.shape[0],2))))
             mask_len = bboxes.shape[0]
             bboxes = np.vstack((bboxes,np.zeros((64-bboxes.shape[0],2))))
@@ -337,29 +293,14 @@ class CocoLine(torchvision.datasets.VisionDataset):
             print(temp1,temp2)
 
 
-            
-        # print(bboxes.shape)
-        # exit()
-
-        # # discard non-valid bboxes
-        # bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, self.img_size['w'] - 1)
-        # bboxes[:, 1::2] = np.clip(bboxes[:, 1::2], 0, self.img_size['h'] - 1)
-        # keep_inds = np.logical_and((bboxes[:, 2] - bboxes[:, 0]) > 0,
-        #                         (bboxes[:, 3] - bboxes[:, 1]) > 0)
-        # bboxes = bboxes[keep_inds]
-
-        # RANDOM FLIPS REMOVED !!!
+        
         image = image.astype(np.float32) / 255.
 
         # randomly change color and lighting
         if self.split == 'train':
             color_jittering_(np.random.RandomState(), image)
-            # lighting_(np.random.RandomState(), image, 0.1, self.eig_val, self.eig_vec)
 
-        # NO NORMALIZE AND TRANSPOSE FOR NOW
 
-        # image -= self.mean
-        # image /= self.std
         image = image.transpose((2, 0, 1))  # [H, W, C] to [C, H, W]
         
 
@@ -370,19 +311,52 @@ class CocoLine(torchvision.datasets.VisionDataset):
         for char in image_file:
             l.append(ord(char))
         image_file_arr = np.array(l)
-        target = {
-            'image':torch.tensor(image, dtype=torch.float32),
-            'size': torch.tensor(list(self.image_size)),
-            'orig_size': torch.tensor([width, height]),
-            'image_id': torch.tensor([db_rec['image_id']], dtype=torch.int64),
-            'bboxes': torch.as_tensor(bboxes, dtype=torch.float32),
-            'labels': np.arange(1),
-            'masks':mask,
-            'mask_len':mask_len,
-            'image_file':image_file_arr
-        }
 
-        # img = Image.fromarray(image)
+        
+        if(image_file not in self.anchor_db.keys()):
+            img1 = cv2.imread(image_file)
+            img = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+            X_cords = bboxes[:, 0::2] *(width)
+            Y_cords = bboxes[:, 1::2] *(height) 
+            X_cords = X_cords.flatten()
+            Y_cords = Y_cords.flatten()
+            keypoints = np.array((X_cords,Y_cords),dtype=np.int32).T
+            anchors_x,anchors_y = self.get_anchors(image_file,keypoints)
+            anchors_x = anchors_x * ( 1 / width)
+            anchors_y = anchors_y * ( 1 / height)
+            anchors = np.array((anchors_x,anchors_y)).T
+            self.anchor_db[image_file] = anchors
+
+
+            
+        # print(self.image_set)
+        if(self.image_set == "train"):
+            target = {
+                'image':torch.tensor(image, dtype=torch.float32),
+                'size': torch.tensor(list(self.image_size)),
+                'orig_size': torch.tensor([width, height]),
+                'image_id': torch.tensor([db_rec['image_id']], dtype=torch.int64),
+                'bboxes': torch.as_tensor(bboxes, dtype=torch.float32),
+                'labels': np.arange(1),
+                'masks':mask.astype(float),
+                'mask_len':mask_len,
+                'anchors':torch.as_tensor(self.anchor_db[image_file], dtype=torch.float32),
+            }
+        else:
+            target = {
+                'image':torch.tensor(image, dtype=torch.float32),
+                'size': torch.tensor(list(self.image_size)),
+                'orig_size': torch.tensor([width, height]),
+                'image_id': torch.tensor([db_rec['image_id']], dtype=torch.int64),
+                'bboxes': torch.as_tensor(bboxes, dtype=torch.float32),
+                'labels': np.arange(1),
+                'masks':mask.astype(float),
+                'mask_len':mask_len,
+                'anchors':torch.as_tensor(self.anchor_db[image_file], dtype=torch.float32),
+                'image_file':image_file,
+                'image_file':image_file_arr
+            }
+
         return target
 
     def __len__(self) -> int:
@@ -473,14 +447,63 @@ class CocoLine(torchvision.datasets.VisionDataset):
         for obj in objs:
             temp.append(np.array(obj['bbox']))
 
+        
+
         rec.append({
             'image_id': index,
             'image': self.image_path_from_index(index),
             'objs': temp,
             'file_name': file_name,
+            
         })
 
         return rec
+    
+    def get_anchors(self,image_file,keypoints):
+        img = cv2.imread(image_file)
+        orig = img.shape
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #FOR LOOP
+        anchor_x = np.array([])
+        anchor_y = np.array([])
+        for i,j in keypoints:
+            temp = self.get_anchor_point((i,j),img,image_file)
+            assert temp != None
+            anchor_x = np.append(anchor_x,temp[0])
+            anchor_y = np.append(anchor_y,temp[1])
+
+        anchor_x = anchor_x.astype(np.uint32)
+        anchor_y = anchor_y.astype(np.uint32)
+        return anchor_x,anchor_y
+
+
+    def get_anchor_point(self,ground_point,image,image_file):
+        if(ground_point ==(0,0)):
+            return (0,0)
+        image = image.astype(np.int32)
+        r_start = 5.0
+        r_delta = 0.1
+        thetha = np.pi/6
+        tolerance =30
+        angles = np.arange(0,2*np.pi+0.0001,thetha)
+        cosines = np.cos(angles)
+        sines = np.sin(angles)
+        rs = np.arange(r_start,0,-r_delta)
+        for r in rs:
+            x,y = ground_point
+            x_new = x+ r*cosines 
+            y_new = y + r*sines
+            x_new = x_new.astype(np.uint32)
+            y_new = y_new.astype(np.uint32)
+            g_pixel = image[y][x]
+            
+            for i,j in zip(x_new,y_new):
+                if(j>=image.shape[0] or i>=image.shape[1] or j<0 or i<0):
+                    continue
+                pixel = image[j][i]
+                if((np.absolute(g_pixel-pixel)<=tolerance).all()):
+                    return i,j
+
+        return None
 
     def _box2cs(self, box):
         x, y, w, h = box[:4]
@@ -512,12 +535,13 @@ class CocoLine(torchvision.datasets.VisionDataset):
 
 
 def build(image_set, args):
-    root = Path(args.coco_path)
+    root = Path(args.data_path)
     assert root.exists(), f'provided COCO path {root} does not exist'
 
     PATHS = {
-        "train": ('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_train2019.json'),
-        "val": ('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_val2019.json'),
+        "train": ('/home/vp.shivasan/data/data/new_train/anno/combined_line_anno.json'),#('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_train2019.json'),
+        "val":('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/temp.json')  #('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/clean_instancesLine(1023)_val2019.json'),
+        #('/home/vp.shivasan/data/data/ChartOCR_lines/line/annotations_cleaned/temp.json')
     }
 
     ann_file = PATHS[image_set]
@@ -526,3 +550,10 @@ def build(image_set, args):
                          is_train=(image_set == 'train'),
                          input_size=args.input_size, scale_factor=args.scale_factor)
     return dataset
+
+
+# array([list([93.0, 259.0, 116.0, 244.0, 139.0, 222.0, 162.0, 245.0, 185.0, 256.0, 208.0, 248.0, 231.0, 203.0, 253.0, 236.0, 276.0, 240.0, 299.0, 232.0, 322.0, 227.0, 345.0, 222.0, 367.0, 232.0, 390.0, 253.0, 413.0, 260.0, 436.0, 208.0, 459.0, 185.0, 482.0, 218.0, 504.0, 241.0, 527.0, 254.0, 550.0, 255.0, 573.0, 254.0, 596.0, 244.0, 619.0, 240.0]),
+#        list([93.0, 257.0, 116.0, 243.0, 139.0, 237.0, 162.0, 238.0, 185.0, 246.0, 208.0, 241.0, 231.0, 166.0, 253.0, 240.0, 276.0, 232.0, 299.0, 232.0, 322.0, 237.0, 345.0, 251.0, 367.0, 258.0, 390.0, 251.0, 413.0, 263.0, 436.0, 218.0, 459.0, 194.0, 482.0, 244.0, 504.0, 227.0, 527.0, 260.0, 550.0, 251.0, 573.0, 256.0, 596.0, 237.0, 619.0, 237.0]),
+#        list([93.0, 199.0, 116.0, 227.0, 139.0, 156.0, 162.0, 232.0, 185.0, 239.0, 208.0, 218.0, 231.0, 256.0, 253.0, 236.0, 276.0, 213.0, 299.0, 204.0, 322.0, 208.0, 345.0, 217.0, 367.0, 238.0, 390.0, 242.0, 413.0, 283.0, 436.0, 280.0, 459.0, 274.0, 482.0, 282.0, 504.0, 270.0, 527.0, 283.0, 550.0, 270.0, 573.0, 260.0, 596.0, 262.0, 619.0, 268.0]),
+#        list([93.0, 57.0, 116.0, 189.0, 139.0, 161.0, 162.0, 199.0, 185.0, 199.0, 208.0, 190.0, 231.0, 117.0, 253.0, 222.0, 276.0, 175.0, 299.0, 204.0, 322.0, 203.0, 345.0, 194.0, 390.0, 232.0, 413.0, 259.0, 436.0, 267.0, 459.0, 269.0, 482.0, 267.0, 504.0, 265.0, 527.0, 253.0, 550.0, 281.0, 573.0, 256.0, 596.0, 262.0, 619.0, 260.0])],
+#       dtype=object)

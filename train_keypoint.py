@@ -1,11 +1,10 @@
+from re import L
 import torch
 import argparse
 from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
-from load_dataset import Line
 import os
 from models import my_model
-from datasets import get_coco_api_from_dataset
 import torch.nn as nn
 from datetime import datetime
 from datasets.coco_line import build as build_coco_line
@@ -15,20 +14,21 @@ import time
 from matcher import build_matcher
 from losses import SetCriterion
 import numpy as np
+import math
 
 torch.cuda.set_device(1)
 # os.environ['MASTER_ADDR'] = 'localhost'
 # os.environ['MASTER_PORT'] = '29500'
 
-LOCAL_RANK = 1
+# LOCAL_RANK = 1
 DATA_DIR = "/home/vp.shivasan/data/data/ChartOCR_lines"
 LOG_NAME  = "ChartIE"
-DIST = False
+DIST = True
 DEVICE = "cuda:1"
 SPLIT_RATIO = 1.0
 ROOT_DIR = "/home/vp.shivasan/ChartIE"
 SAVE_PATH_BASE = "/home/vp.shivasan/ChartIE/training"
-GPUS = 1
+GPUS = 4
 
 
 parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -108,7 +108,7 @@ parser.add_argument('--eos_coef', default=0.1, type=float,
 
 # dataset parameters
 parser.add_argument('--dataset_file', default='coco')
-parser.add_argument('--coco_path', default="/home/vp.shivasan/data/data/ChartOCR_lines/line/images", type=str)
+parser.add_argument('--data_path', default="/home/vp.shivasan/data/data/new_train/images", type=str)
 
 parser.add_argument('--seed', default=42, type=int)
 
@@ -120,11 +120,20 @@ parser.add_argument('--scale_factor', default=0.3, type=float, help="Augmentatio
 
 parser.add_argument('--num_workers', default=16, type=int)
 parser.add_argument('--lr_step', type=int, default=10)
-parser.add_argument('--save_interval', type=int, default=5000)
+parser.add_argument('--save_interval', type=int, default=10000)
 parser.add_argument('--log_interval', type=int, default=1000)
 parser.add_argument('--val_interval', type=int, default=2500)
 parser.add_argument('--local_rank', type=int, default=1)
 parser.add_argument('--lr_decay', type=int, default=10)
+parser.add_argument('--alpha', type=float, default=0.5)
+
+
+parser.add_argument('--distributed', default=True, type=bool)
+# parser.add_argument('--local_rank', default=0, type=int)
+parser.add_argument('--num_gpus', default=4, type=int)
+parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')
+parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+parser.add_argument('--resume', default=False)
 
 
 args = parser.parse_args()
@@ -136,18 +145,20 @@ def remove_items(test_list, item):
   
     return res
 def main(args):
+    LOCAL_RANK = args.local_rank
     if(LOCAL_RANK == 1):
         writer = SummaryWriter(DATA_DIR + '/tensorboard/' + LOG_NAME)
     iter = 0
     epoch = None
+    
     torch.manual_seed(317)
-    torch.backends.cudnn.benchmark = True  
-    num_gpus = torch.cuda.device_count()
+    torch.backends.cudnn.benchmark = True 
+    # DIST = False 
     if DIST:
         DEVICE = torch.device('cuda:%d' % LOCAL_RANK)
         torch.cuda.set_device(LOCAL_RANK)
         dist.init_process_group(backend='nccl', init_method='env://',
-                            world_size=num_gpus, rank=LOCAL_RANK)
+                            world_size=args.num_gpus, rank=LOCAL_RANK)
         print("DIST IS RUNNING")
     
     else:
@@ -160,10 +171,14 @@ def main(args):
         dataset_train = build_coco_line(image_set='train', args=args)
     else:
         dataset_train = dataset_val
-
-    sampler_train = torch.utils.data.distributed.DistributedSampler(dataset_train,num_replicas=num_gpus,
-                                                                  rank=LOCAL_RANK)
-    sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+    # dataset_val = build_coco_line(image_set='val', args=args)
+    if(DIST):
+        sampler_train = torch.utils.data.distributed.DistributedSampler(dataset_train)
+        sampler_val = torch.utils.data.distributed.DistributedSampler(dataset_val,shuffle = False)
+    else:
+        sampler_train = torch.utils.data.RandomSampler(dataset_train)
+        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+    # sampler_val = torch.utils.data.distributed.DistributedSampler(dataset_val,shuffle = False)
 
     batch_sampler_train = torch.utils.data.BatchSampler(
         sampler_train, args.batch_size, drop_last=True)
@@ -179,37 +194,14 @@ def main(args):
                                  
                                  num_workers=args.num_workers,
                                  pin_memory=pin_memory)
-    # Dataset = Line
-    # train_dataset = Dataset(DATA_DIR, 'train', split_ratio=SPLIT_RATIO, img_size=args.input_size)
-    # train_sampler = torch.utils.data.distributed.DistributedSampler(dataset_train,
-    #                                                               num_replicas=num_gpus,
-    #                                                               rank=LOCAL_RANK)
-    # train_loader = torch.utils.data.DataLoader(train_dataset,
-    #                                          batch_size=args.batch_size // num_gpus
-    #                                          if DIST else args.batch_size,
-    #                                          shuffle=not DIST,
-    #                                          num_workers=args.num_workers,
-    #                                          pin_memory=True,
-    #                                          drop_last=True,
-    #                                          sampler=train_sampler if DIST else None)
-
-    Dataset_eval = Line
-    # val_dataset = Dataset_eval(DATA_DIR, 'val')
-    # val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset,
-    #                                                               num_replicas=num_gpus,
-    #                                                               rank=LOCAL_RANK)
-    # val_loader = torch.utils.data.DataLoader(val_dataset,
-    #                                          batch_size=args.batch_size // num_gpus
-    #                                          if DIST else args.batch_size,
-    #                                          shuffle=not DIST,
-    #                                          num_workers=args.num_workers,
-    #                                          pin_memory=True,
-    #                                          drop_last=True,
-    #                                          sampler=val_sampler if DIST else None)
+    
 
     print('Creating model...')
+    # args.device = "cuda"
+    # DEVICE = "cuda"
     enc_dec_model = my_model.Model(args)
-    print("Total param size = %f MB" % (sum(v.numel() for v in enc_dec_model.parameters()) / 1024 / 1024))
+    enc_dec_model.to(DEVICE)
+    
     bb = "encoder"
     param_dicts = [
             {"params": [p for n, p in enc_dec_model.named_parameters() if bb not in n and p.requires_grad]},
@@ -221,24 +213,52 @@ def main(args):
     optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
                                       weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-        factor=0.1, patience=10, threshold=0.0001, threshold_mode='abs', verbose=True)
+        factor=0.1, patience=10, threshold=0.0001, threshold_mode='rel', verbose=True)
+    scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10)
+
+    if(args.resume):
+        state = torch.load('/home/vp.shivasan/ChartIE/training/line_50_70000_ckpt.t7', map_location = 'cpu')
+        enc_dec_model.load_state_dict(state['state_dict'])
+        print("Loaded model at Epoch:",state["epoch"])
+        epoch = state["epoch"]
+        if('optimizer' in state):
+            optimizer.load_state_dict(state['optimizer'])
+            print(optimizer)
+        if('scheduler' in state):
+            scheduler.load_state_dict(state['scheduler'])
+        if('scheduler2' in state):
+            scheduler2.load_state_dict(state['scheduler2'])
     
     if DIST:
     # model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     # model = model.to(cfg.device)
         enc_dec_model = nn.parallel.DistributedDataParallel(enc_dec_model,
-                                                device_ids=[LOCAL_RANK, ],
-                                                output_device=LOCAL_RANK)
+                                                device_ids=[LOCAL_RANK])
+                                                
         print("MODEL IN DIST")
     else:
     # comment this for single GPU
     # model = nn.DataParallel(model).to(cfg.device)
         enc_dec_model = nn.DataParallel(enc_dec_model,device_ids=[1,]).to('cuda:1')
+    
+
+    
     def train(epoch,iter,optimizer):
-        print('\n%s Epoch: %d' % (datetime.now(), epoch))
+        if(LOCAL_RANK == 1):
+            print('\n%s Epoch: %d' % (datetime.now(), epoch))
         enc_dec_model.train()
         tic = time.perf_counter()
         epoch_loss = 0.0
+        epoch_l1_loss =0.0
+        epoch_ang_loss = 0.0
+        alpha = args.alpha
+        # if(epoch <18):
+        #         alpha = args.alpha
+        # elif(epoch>23):
+        #         alpha = 0.1
+        # else:
+        #         alpha = args.alpha*(math.exp(-0.322*(epoch-18)))
+
         for batch_idx, batch in enumerate(train_loader):
             for k in batch:
                 batch[k] = batch[k].to(device=DEVICE, non_blocking=True)
@@ -254,7 +274,7 @@ def main(args):
                 torch.save(state, SAVE_PATH_BASE + '/line_latest_ckpt.t7')
                 exit(0)
 
-            outputs = enc_dec_model(batch['image'])
+            outputs = enc_dec_model(batch['image'])  ### !!!!!!!!!!!!!!!!!!! Y CORDS SIMILAR BTW IMAGE KEYPOINTS AND ANCHRS 
             # l = batch["bboxes"].tolist()
             # targets = []
             # for elem in l:
@@ -264,8 +284,9 @@ def main(args):
             matcher = build_matcher(args)
             weight_dict = {'loss_bbox': args.bbox_loss_coef}
             losses = ['keypoints']
+            
             criterion= SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses)
+                             eos_coef=args.eos_coef, losses=losses,alp = alpha)
             targets = []
             i = 0
          
@@ -273,29 +294,44 @@ def main(args):
                 elem = batch["bboxes"][idx]
                 mask = batch["masks"][idx]
                 mask_len = batch["mask_len"][idx]
-                targets.append({"bboxes":elem,"mask":mask,"labels":np.arange(1),"mask_len":mask_len})
+                anchors = batch["anchors"][idx]
+                targets.append({"bboxes":elem,"mask":mask,"labels":np.arange(1),"mask_len":mask_len,"anchors":anchors})
                 i+=1
             loss_dict = criterion(outputs,targets)
 
             del outputs
             loss = loss_dict["loss_bbox"]
-            writer.add_scalar('loss', loss.item(), iter)
+            l1_loss = loss_dict["l1_loss"]
+            ang_loss = loss_dict["ang_loss"]
+            # print(loss)
+
+            if(LOCAL_RANK == 1):
+                writer.add_scalar('loss', loss.item(), iter)
+                writer.add_scalar('l1_loss', l1_loss.item(), iter)
+                writer.add_scalar('ang_loss', ang_loss.item(), iter)
+
+                
             epoch_loss+=loss
+            epoch_l1_loss +=l1_loss
+            epoch_ang_loss+=ang_loss
             loss = loss.unsqueeze(0)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            if epoch > 0 and epoch % args.lr_step == 0:
-                if optimizer.param_groups[0]["lr"] !=args.lr / (args.lr_decay) ** (epoch // args.lr_step):
-                    optimizer = decay_lr(optimizer, args.lr_decay, epoch, iter)
-                    print(optimizer.param_groups[0]["lr"])
+            # if epoch > 0 and epoch % args.lr_step == 0:
+            #     if optimizer.param_groups[0]["lr"] !=args.lr / (args.lr_decay) ** (epoch // args.lr_step):
+            #         optimizer = decay_lr(optimizer, args.lr_decay, epoch, iter)
+            #         print(optimizer.param_groups[0]["lr"])
             if LOCAL_RANK == 1 and iter % args.save_interval == 0:
                 state = {
                 'iter': iter,
                 'epoch': epoch,
                 'state_dict': enc_dec_model.module.state_dict(),
                 'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'scheduler2': scheduler2.state_dict()
+
                 }
                 torch.save(state, SAVE_PATH_BASE+ '/line_' + str(epoch) + "_" + str(iter) + "_ckpt.t7")
 
@@ -305,6 +341,8 @@ def main(args):
                 'epoch': epoch,
                 'state_dict': enc_dec_model.module.state_dict(),
                 'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'scheduler2': scheduler2.state_dict()
                 }
                 if LOCAL_RANK == 1: # log and save only one model from all GPUs
                     torch.save(state, SAVE_PATH_BASE + '/line_latest_ckpt.t7')
@@ -322,9 +360,17 @@ def main(args):
                 enc_dec_model.train()
             iter += 1
         epoch_loss/=len(train_loader)
+        epoch_l1_loss/=len(train_loader)
+        epoch_ang_loss/=len(train_loader)
         scheduler.step(epoch_loss)
-        print("Epoch:%d"%(epoch)+"Epoch loss=%.5f"%(epoch_loss))
-        writer.add_scalar('Epoch loss', epoch_loss, epoch)
+        
+        if(LOCAL_RANK == 1):
+            print("Epoch:%d"%(epoch)+"Epoch loss=%.5f"%(epoch_loss)+"Epoch l1 loss=%.5f"%(epoch_l1_loss)+"Epoch angular loss=%.5f"%(epoch_ang_loss))
+            writer.add_scalar('Epoch loss', epoch_loss, epoch)
+            writer.add_scalar('Epoch L1 loss', epoch_l1_loss, epoch)
+            writer.add_scalar('Epoch Angular loss', epoch_ang_loss, epoch)
+            writer.add_scalar('Alpha', alpha, epoch)
+
         return iter, optimizer
     def val(epoch, iter):
         print('\n%s Val@Epoch: %d, Iteration: %d' % (datetime.now(), epoch, iter))
@@ -366,7 +412,8 @@ def main(args):
     if epoch is None:
         epoch = 1
     for epoch in range(epoch, args.epochs + 1):
-        sampler_train.set_epoch(epoch)
+        if(DIST):
+            sampler_train.set_epoch(epoch)
         iter, optimizer = train(epoch, iter, optimizer)
 
     
@@ -374,12 +421,12 @@ def main(args):
 
     
 
-def decay_lr(optimizer, lr_decay, epoch, iter):
-  print("At Epoch " + str(epoch) + ", Iteration " + str(iter) + ", dividing learning rate by: " + str(lr_decay))
-  for param_group in optimizer.param_groups:
-    param_group["lr"] /= lr_decay # CHANGED from param_group["lr"] = lr
-    # param_group["lr"] = lr/lr_decay
-  return optimizer
+# def decay_lr(optimizer, lr_decay, epoch, iter):
+#   print("At Epoch " + str(epoch) + ", Iteration " + str(iter) + ", dividing learning rate by: " + str(lr_decay))
+#   for param_group in optimizer.param_groups:
+#     param_group["lr"] /= lr_decay # CHANGED from param_group["lr"] = lr
+#     # param_group["lr"] = lr/lr_decay
+#   return optimizer
 
 
 if __name__ == '__main__':
@@ -387,62 +434,6 @@ if __name__ == '__main__':
 
 
 
+#   tensorboard --logdir=/home/vp.shivasan/data/data/ChartOCR_lines/tensorboard/ChartIE --host "10.0.62.205" --port 6009 --reload_multifile=true
 
-
-
-# 2022-02-06 14:41:23.671739 Epoch: 1
-# Epoch:1Epoch loss=67.54978
-
-# 2022-02-06 14:50:53.518414 Epoch: 2
-# Epoch:2Epoch loss=67.49040
-
-# 2022-02-06 15:01:34.474513 Epoch: 3
-# Epoch:3Epoch loss=32.46452
-
-# 2022-02-06 15:12:16.634735 Epoch: 4
-# Epoch:4Epoch loss=432.30338
-
-# 2022-02-06 15:22:57.038235 Epoch: 5
-# Epoch:5Epoch loss=65.55044
-
-# 2022-02-06 15:33:37.594022 Epoch: 6
-# Epoch:6Epoch loss=101.41268
-
-# 2022-02-06 15:44:18.417893 Epoch: 7
-# Epoch:7Epoch loss=48.91854
-
-# 2022-02-06 15:53:25.636885 Epoch: 8
-# Epoch:8Epoch loss=37.83684
-
-# 2022-02-06 16:04:07.908046 Epoch: 9
-# Epoch:9Epoch loss=70.16045
-
-# 2022-02-06 16:14:50.991546 Epoch: 10
-# 2022-02-06 18:07:22.278058 Epoch: 11
-# Epoch:11Epoch loss=451.70132
-
-# 2022-02-06 18:15:40.146453 Epoch: 12
-# Epoch:12Epoch loss=34.61289
-
-# 2022-02-06 18:23:56.694974 Epoch: 13
-# Epoch:13Epoch loss=49.07185
-
-# 2022-02-06 18:32:13.255877 Epoch: 14
-# Epoch    14: reducing learning rate of group 0 to 1.0000e-06.
-# Epoch    14: reducing learning rate of group 1 to 1.0000e-07.
-# Epoch:14Epoch loss=93.37928
-
-# 2022-02-06 18:40:31.268783 Epoch: 15
-# Epoch:15Epoch loss=41.78336
-
-# 2022-02-06 18:48:49.370239 Epoch: 16
-# Epoch:16Epoch loss=57.42586
-
-# 2022-02-06 18:57:06.866768 Epoch: 17
-# Epoch:17Epoch loss=59.32842
-
-# 2022-02-06 19:05:23.913671 Epoch: 18
-# Epoch:18Epoch loss=43.99925
-
-# 2022-02-06 19:13:42.002991 Epoch: 19
-# Epoch:19Epoch loss=89.89934
+# python -m torch.distributed.launch --nproc_per_node=4 --node_rank=0 main.py --vit_arch xcit_small_12_p16 --batch_size 42 --input_size 288 384 --hidden_dim 384 --vit_dim 384 --num_workers 24 --vit_weights https://dl.fbaipublicfiles.com/xcit/xcit_small_12_p16_384_dist.pth --alpha 0.5 
