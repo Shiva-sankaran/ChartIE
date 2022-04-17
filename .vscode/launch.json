@@ -1,0 +1,22 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            // "args": ["--coco_path", "/home/md.hassan/charts/s_CornerNet/synth_data/data/line/figqa/",
+            //  "--batch_size", "16","--dataset_file", "charts", "--save_dir", "finetune", 
+            //  "--resume", "/home/md.hassan/charts/detr/charts/ckpt/finetune/checkpoint35.pth"]
+            "args": ["--coco_path", "/home/md.hassan/charts/s_CornerNet/synth_data/data/line/figqa/",
+                "--weights", "/home/md.hassan/charts/detr/charts/ckpt/figqa_dataset/checkpoint_latest.pth"]
+
+            // "args": ["--split", "1k_val", "--total_images", "1000"]
+        }
+    ]
+}

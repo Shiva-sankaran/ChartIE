@@ -421,7 +421,7 @@ class MLP(nn.Module):
         return x
 
 
-def build(args):
+def build_kp(args):
     # the `num_classes` naming here is somewhat misleading.
     # it indeed corresponds to `max_obj_id + 1`, where max_obj_id
     # is the maximum id for a class in your dataset. For example,
