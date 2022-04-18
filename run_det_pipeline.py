@@ -95,7 +95,8 @@ colors = [(0, 122 , 122), (122, 0, 122), (0, 122 , 122), (255, 0 , 255), (0, 255
           (122, 122, 0), (255, 0, 0), (0, 255, 0), (0, 0 , 255)]
 font = cv2.FONT_HERSHEY_SIMPLEX
 fontScale = 1
-reader = easyocr.Reader(['en'], gpu = True) # only english for now
+# reader = easyocr.Reader(['en'], gpu = True) # only english for now
+reader = easyocr.Reader(['en'], gpu = False) # only english for now
 
 def main(args):
     device = args.device
@@ -196,20 +197,19 @@ def main(args):
 
         # match OCR predicted legend text boxes and DETR predicted legend text boxes
         ocr_boxes = np.array([np.hstack((r[0][0], r[0][2])) for r in results])
-        giou_matrix = match_text_boxes(ocr_boxes, legend_text_bboxes)
+        giou_matrix_legend = match_text_boxes(ocr_boxes, legend_text_bboxes)
 
         # match OCR predicted tick text boxes and DETR predicted tick text boxes
         ocr_boxes = np.array([np.hstack((r[0][0], r[0][2])) for r in results])
-        giou_matrix = match_text_boxes(ocr_boxes, tick_bboxes)
+        giou_matrix_tick = match_text_boxes(ocr_boxes, tick_bboxes)
 
         # overlay matched boxes
         # ocr boxes in green. detr boxes in red
         legend_text_bboxes = np.array(legend_text_bboxes).astype(np.int32)
-        plot_matched_boxes(samples_, giou_matrix, ocr_boxes, legend_text_bboxes)
+        plot_matched_boxes(samples_, giou_matrix_legend, ocr_boxes, legend_text_bboxes)
 
         tick_bboxes = np.array(tick_bboxes).astype(np.int32)
-        plot_matched_boxes(samples_, giou_matrix, ocr_boxes, tick_bboxes)
-
+        plot_matched_boxes(samples_, giou_matrix_tick, ocr_boxes, tick_bboxes)
 
         '''
         - To get text box, GIoU must be > some thresh[0?] b/w:

@@ -36,8 +36,8 @@ model.eval()
 data_path = '/home/md.hassan/charts/s_CornerNet/synth_data/data/line/figqa/val/'
 save_path = '/home/md.hassan/charts/ChartIE/legend_mapping/results/'
 
-# for f in os.listdir(save_path):
-#     os.remove(save_path + f) 
+for f in os.listdir(save_path):
+    os.remove(save_path + f) 
 
 image_path = data_path + 'images'
 anno_path = data_path + 'anno/'

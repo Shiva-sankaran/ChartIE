@@ -17,6 +17,9 @@
                 "--weights", "/home/md.hassan/charts/detr/charts/ckpt/figqa_dataset/checkpoint_latest.pth"]
 
             // "args": ["--split", "1k_val", "--total_images", "1000"]
-        }
+        //     "args": [ "--batch_size" ,"42", "--input_size", "288", "384", "--hidden_dim", "384", 
+        //         "--vit_dim","384" ,"--num_workers", "24",   "--vit_weights", 
+        //         "https://dl.fbaipublicfiles.com/xcit/xcit_small_12_p16_384_dist.pth"]
+        // }
     ]
 }
