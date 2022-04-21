@@ -181,35 +181,36 @@ def main(args):
             nms_idx = nms(dets, 0.0)
             cls = pred_classes[box_idx][0]
             for box in cls_boxes[nms_idx]:    
-                # plot_box(samples_, cls, box, w, h)
+            # for box in cls_boxes:    
+                plot_box(samples_, cls, box, w, h)
                 if cls == 7: # if tick bbox, then save it
                     tick_bboxes.append(np.array(box))
                 elif cls == 8: # if legend text bbox, then save it
                     legend_text_bboxes.append(np.array(box))
 
-        # get boxes and text from OCR
-        results = reader.readtext(samples_.astype(np.uint8), rotation_info = [270]) # assuming 270 deg rotation for vertical text
-        # plot OCR result
-        for result in results:
-            r = np.array(result[0]).astype(int)
-            cv2.rectangle(samples_, r[0][0], r[0][2], (0, 255, 0), 1)  
-            cv2.putText(samples_, result[1], r[0][0], font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)          
+        # # get boxes and text from OCR
+        # results = reader.readtext(samples_.astype(np.uint8), rotation_info = [270]) # assuming 270 deg rotation for vertical text
+        # # plot OCR result
+        # for result in results:
+        #     r = np.array(result[0]).astype(int)
+        #     cv2.rectangle(samples_, r[0], r[2], (0, 255, 0), 1)  
+        #     cv2.putText(samples_, result[1], r[0], font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)          
 
-        # match OCR predicted legend text boxes and DETR predicted legend text boxes
-        ocr_boxes = np.array([np.hstack((r[0][0], r[0][2])) for r in results])
-        giou_matrix_legend = match_text_boxes(ocr_boxes, legend_text_bboxes)
+        # ocr_boxes = np.array([np.hstack((r[0][0], r[0][2])) for r in results])
+        # ocr_boxes = ocr_boxes[(ocr_boxes[:, 2] >= ocr_boxes[:, 0])*(ocr_boxes[:, 3] >= ocr_boxes[:, 1])]
 
-        # match OCR predicted tick text boxes and DETR predicted tick text boxes
-        ocr_boxes = np.array([np.hstack((r[0][0], r[0][2])) for r in results])
-        giou_matrix_tick = match_text_boxes(ocr_boxes, tick_bboxes)
+        # # match OCR predicted legend text boxes and DETR predicted legend text boxes
+        # giou_matrix_legend = match_text_boxes(ocr_boxes.copy(), legend_text_bboxes.copy())
+        # # match OCR predicted tick text boxes and DETR predicted tick text boxes
+        # giou_matrix_tick = match_text_boxes(ocr_boxes.copy(), tick_bboxes.copy())
 
-        # overlay matched boxes
-        # ocr boxes in green. detr boxes in red
-        legend_text_bboxes = np.array(legend_text_bboxes).astype(np.int32)
-        plot_matched_boxes(samples_, giou_matrix_legend, ocr_boxes, legend_text_bboxes)
+        # # overlay matched boxes
+        # # ocr boxes in green. detr boxes in red
+        # legend_text_bboxes = np.array(legend_text_bboxes).astype(np.int32)
+        # plot_matched_boxes(samples_, giou_matrix_legend, ocr_boxes, legend_text_bboxes)
 
-        tick_bboxes = np.array(tick_bboxes).astype(np.int32)
-        plot_matched_boxes(samples_, giou_matrix_tick, ocr_boxes, tick_bboxes)
+        # tick_bboxes = np.array(tick_bboxes).astype(np.int32)
+        # plot_matched_boxes(samples_, giou_matrix_tick, ocr_boxes, tick_bboxes)
 
         '''
         - To get text box, GIoU must be > some thresh[0?] b/w:
@@ -230,7 +231,7 @@ def main(args):
             - deal with xticks and yticks detection and unit scaling
         '''
 
-        cv2.imwrite(output_path + str(ctr) + '.png', samples_)
+        cv2.imwrite(output_path + image_name, samples_)
         ctr += 1
 
 def match_text_boxes(ocr_boxes, det_boxes):
@@ -241,6 +242,10 @@ def match_text_boxes(ocr_boxes, det_boxes):
 
 def plot_matched_boxes(samples_, giou_matrix, ocr_boxes, det_boxes):
     count = 0
+    ocr_boxes = ocr_boxes.astype(np.uint32)
+    det_boxes = torch.as_tensor(det_boxes)
+    det_boxes = box_ops.box_cxcywh_to_xyxy(det_boxes)
+    det_boxes = np.array(det_boxes).astype(np.uint32)
     while(count < min(giou_matrix.shape)):
         giou_matrix, score, ocr_idx, det_box_idx = find_max(np.array(giou_matrix))
         if score > 0:

@@ -5,9 +5,9 @@ import cv2
 import easyocr
 import time
 
-reader = easyocr.Reader(['en'], gpu = False) # only english for now
+reader = easyocr.Reader(['en'], gpu = True) # only english for now
 
-output_path = '/home/md.hassan/charts/ChartIE/results_det/'
+output_path = '/home/md.hassan/charts/ChartIE/results_ocr/'
 image_path = '/home/md.hassan/charts/s_CornerNet/synth_data/data/line/figqa/val/images/'
 font = cv2.FONT_HERSHEY_SIMPLEX
 fontScale = 1
@@ -26,8 +26,8 @@ for image_name in tq.tqdm(os.listdir(image_path)[:20]):
         r = np.array(result[0]).astype(int)
         cv2.rectangle(image, r[0], r[2], (0, 255, 0), 1)  
         cv2.putText(image, result[1], r[0], font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)          
-    cv2.imwrite(output_path + str(ctr) + '.png', image)
+    cv2.imwrite(output_path + image_name, image)
     ctr += 1
 print("Avg OCR time = {}".format(time_/ctr))
-# 0.3744 sec with GPU
+# 0.2466 sec with GPU
 # 1.7678 sec without GPU
