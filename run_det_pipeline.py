@@ -7,6 +7,7 @@ import tqdm as tq
 import numpy as np
 import torch
 import cv2
+import pytesseract
 import easyocr
 from util.misc import *
 from util import box_ops
@@ -95,8 +96,7 @@ colors = [(0, 122 , 122), (122, 0, 122), (0, 122 , 122), (255, 0 , 255), (0, 255
           (122, 122, 0), (255, 0, 0), (0, 255, 0), (0, 0 , 255)]
 font = cv2.FONT_HERSHEY_SIMPLEX
 fontScale = 1
-# reader = easyocr.Reader(['en'], gpu = True) # only english for now
-reader = easyocr.Reader(['en'], gpu = False) # only english for now
+reader = easyocr.Reader(['en'], gpu = True) # only english for now
 
 def main(args):
     device = args.device
@@ -120,14 +120,19 @@ def main(args):
     epoch = checkpoint['epoch']
     print("Loaded model at Epoch {}".format(epoch))
 
-    output_path = '/home/md.hassan/charts/ChartIE/results_det/'
     image_path = '/home/md.hassan/charts/s_CornerNet/synth_data/data/line/figqa/val/images/'
+    output_path = '/home/md.hassan/charts/ChartIE/results_det_synth/'
+
+    # image_path = '/home/md.hassan/charts/s_CornerNet/data/linedata/line/images/test2019/'
+    # output_path = '/home/md.hassan/charts/ChartIE/results_det_chartocr/'
 
     for f in os.listdir(output_path):
         os.remove(output_path+'/'+f) 
 
-    ctr = 0
     for image_name in tq.tqdm(os.listdir(image_path)[:50]):
+    # for image_name in tq.tqdm(os.listdir(image_path)):
+    #     if int(image_name[:-4]) < 10000:
+    #         continue
         samples = cv2.imread(image_path + image_name)
 
         samples = samples.astype(np.float32)
@@ -143,7 +148,7 @@ def main(args):
         pred_boxes = outputs['pred_boxes'][0]
 
         max_output = pred_logits.softmax(-1).max(-1)
-        topk = max_output.values.topk(50)
+        topk = max_output.values.topk(100)
 
         pred_logits = pred_logits[topk.indices]
         pred_boxes = pred_boxes[topk.indices]
@@ -154,7 +159,7 @@ def main(args):
             if i in pred_classes:
                 unique_idx.append(np.where(pred_classes.cpu() == i )[0][0])
         non_unique_classes = []
-        for i in range(6, 10):
+        for i in range(6, len(CLASSES)):
             if i in pred_classes:
                 non_unique_classes.append(np.where(pred_classes.cpu() == i )[0])
 
@@ -164,13 +169,29 @@ def main(args):
         samples_ = samples_.astype(np.int32)
         pred_boxes = pred_boxes.cpu() * torch.Tensor([w, h, w, h])
 
+        # get boxes and text from OCR
+        results = reader.readtext(samples_.astype(np.uint8), rotation_info = [270]) # assuming 270 deg rotation for vertical text
+        # plot OCR result
+        # for result in results:
+        #     r = np.array(result[0]).astype(int)
+        #     cv2.rectangle(samples_, r[0], r[2], (0, 255, 0), 1)  
+        #     cv2.putText(samples_, result[1], r[0], font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)          
+
         # plot detr predictions (unique boxes)
+        unique_boxes = {}
         for cls, box in zip(pred_classes[unique_idx], pred_boxes[unique_idx]):
             plot_box(samples_, cls, box, w, h)
+            box = box_ops.box_cxcywh_to_xyxy(box)
+            box[1] = h - box[1]
+            box[3] = h - box[3]
+            unique_boxes[int(cls)] = box
+        inner_plot_area = unique_boxes[5]
 
         # plot detr predictions (non unique boxes)
-        legend_text_bboxes = []
         tick_bboxes = []
+        legend_marker_bboxes = []
+        legend_text_bboxes = []        
+        legend_ele_bboxes = []        
         for class_idx, box_idx in enumerate(non_unique_classes):
             cls_boxes = pred_boxes[non_unique_classes[class_idx]]
             dets = box_ops.box_cxcywh_to_xyxy(cls_boxes) #tl, br
@@ -178,39 +199,138 @@ def main(args):
             dets[:, 1] = h - dets[:, 1]
             dets[:, 3] = h - dets[:, 3]
             dets = torch.index_select(dets, 1, torch.LongTensor([0, 3, 2, 1]))
-            nms_idx = nms(dets, 0.0)
+            nms_idx = nms(dets, 0.1)
             cls = pred_classes[box_idx][0]
             for box in cls_boxes[nms_idx]:    
             # for box in cls_boxes:    
                 plot_box(samples_, cls, box, w, h)
-                if cls == 7: # if tick bbox, then save it
+                if cls == 6: # if tick bbox, then save it
                     tick_bboxes.append(np.array(box))
+                    # plot_box(samples_, cls, box, w, h)
+                elif cls == 7: # if legend marker bbox, then save it
+                    legend_marker_bboxes.append(np.array(box))
+                    # plot_box(samples_, cls, box, w, h)
                 elif cls == 8: # if legend text bbox, then save it
                     legend_text_bboxes.append(np.array(box))
+                    # plot_box(samples_, cls, box, w, h)
+                elif cls == 9: # if legend ele bbox, then save it
+                    legend_ele_bboxes.append(np.array(box))
+                    # plot_box(samples_, cls, box, w, h)
 
-        # # get boxes and text from OCR
-        # results = reader.readtext(samples_.astype(np.uint8), rotation_info = [270]) # assuming 270 deg rotation for vertical text
-        # # plot OCR result
-        # for result in results:
-        #     r = np.array(result[0]).astype(int)
-        #     cv2.rectangle(samples_, r[0], r[2], (0, 255, 0), 1)  
-        #     cv2.putText(samples_, result[1], r[0], font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)          
 
-        # ocr_boxes = np.array([np.hstack((r[0][0], r[0][2])) for r in results])
-        # ocr_boxes = ocr_boxes[(ocr_boxes[:, 2] >= ocr_boxes[:, 0])*(ocr_boxes[:, 3] >= ocr_boxes[:, 1])]
+        if len(results) > 0: 
+            ocr_boxes = np.array([np.hstack((r[0][0], r[0][2])) for r in results])
+            ocr_boxes = ocr_boxes[(ocr_boxes[:, 2] >= ocr_boxes[:, 0])*(ocr_boxes[:, 3] >= ocr_boxes[:, 1])]
+            ocr_text = np.array([r[1] for r in results])
+            # ocr_dict = {}
+            # for text, box in zip(ocr_text, ocr_boxes):
+            #     ocr_dict[text] = box
+        else:
+            ocr_boxes = []
+            ocr_text = []
+            # ocr_dict = {}
 
-        # # match OCR predicted legend text boxes and DETR predicted legend text boxes
-        # giou_matrix_legend = match_text_boxes(ocr_boxes.copy(), legend_text_bboxes.copy())
-        # # match OCR predicted tick text boxes and DETR predicted tick text boxes
-        # giou_matrix_tick = match_text_boxes(ocr_boxes.copy(), tick_bboxes.copy())
+        # match OCR predicted legend text boxes and DETR predicted legend text boxes
+        giou_matrix_legend_text = match_text_boxes(ocr_boxes.copy(), legend_text_bboxes.copy())
+        # match OCR predicted tick text boxes and DETR predicted tick text boxes
+        giou_matrix_tick = match_text_boxes(ocr_boxes.copy(), tick_bboxes.copy())
 
-        # # overlay matched boxes
-        # # ocr boxes in green. detr boxes in red
+        # giou_matrix_legend_ele = match_text_boxes(ocr_boxes.copy(), legend_ele_bboxes.copy())
+
+        # overlay matched boxes
+        # ocr boxes in green. detr boxes in red
+        legend_text_bboxes = np.array(legend_text_bboxes).astype(np.int32)
+        matched_boxes1, _, _ = get_matched_boxes(samples_, giou_matrix_legend_text, ocr_boxes, legend_text_bboxes)
+
         # legend_text_bboxes = np.array(legend_text_bboxes).astype(np.int32)
-        # plot_matched_boxes(samples_, giou_matrix_legend, ocr_boxes, legend_text_bboxes)
+        # matched_boxes2, _, _ = get_matched_boxes(samples_, giou_matrix_legend_ele, ocr_boxes, legend_text_bboxes)
 
-        # tick_bboxes = np.array(tick_bboxes).astype(np.int32)
-        # plot_matched_boxes(samples_, giou_matrix_tick, ocr_boxes, tick_bboxes)
+        tick_bboxes = np.array(tick_bboxes).astype(np.int32)
+        try:
+            _, det_box_ids, ocr_box_ids = get_matched_boxes(samples_, giou_matrix_tick, ocr_boxes, tick_bboxes)
+        except:
+            continue        
+
+        # for each marker, find corresponding text. if no corresponding text, have some placeholder text
+        # 2 ways:
+        # 1. find among the already matched legend text boxes
+        # 2. find among all text boxes
+
+        # for marker in legend_marker_bboxes:
+        giou_matrix_legend_marker = match_text_boxes(np.array(matched_boxes1, dtype=np.int32).copy(), 
+                                    legend_marker_bboxes.copy())
+        count = 0
+        final_marker = []
+        final_text = []
+        while(count < min(giou_matrix_legend_marker.shape)):
+            giou_matrix_legend_marker, score, text_box_idx, marker_idx = find_max(np.array(giou_matrix_legend_marker))
+            final_marker.append(legend_marker_bboxes[marker_idx])
+            final_text.append(ocr_text[np.where(np.all(ocr_boxes == matched_boxes1[text_box_idx], axis=1))])
+            count += 1
+
+        # for box, text in zip(final_marker, final_text):
+        #     cv2.putText(samples_, str(text)[2:-2], box[:2].astype(np.uint32), font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)    
+
+        # for handling ticks ocr: need to resize
+        # matched_tick_text_boxes = box_ops.box_cxcywh_to_xyxy(torch.as_tensor(np.array(matched_tick_text_boxes, dtype=np.int32)))
+        samples__ = unnormalize(samples.copy())*255.0
+        samples__ = samples__.astype(np.uint8)
+
+        tick_texts = [ocr_text[idx] for idx in ocr_box_ids]
+        final_ticks = [tick_bboxes[idx] for idx in det_box_ids]
+        for idx in det_box_ids:
+             tick_bboxes = np.delete(tick_bboxes, idx, 0)
+        for bbox in tick_bboxes:
+            try:
+                crop = samples__[int(bbox[1]-10-bbox[3]//2):int(bbox[1]+10+bbox[3]//2), int(bbox[0]-10-bbox[2]//2):int(bbox[0]+10+bbox[2]//2)]
+                crop = cv2.resize(crop, (60, int(60*bbox[3]/bbox[2])))
+                r_ = reader.readtext(crop)
+
+                if len(r_) == 0:
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+                    r_ = reader.readtext(gray)
+                if len(r_) == 0:
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    gray = cv2.medianBlur(gray, 3)
+                    r_ = reader.readtext(gray)
+                if len(r_) > 0:
+                    # cv2.putText(samples_, r_[0][1], bbox[:2].astype(np.uint32), font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)    
+                    tick_texts.append(r_[0][1])
+                    final_ticks.append(bbox)
+            except:
+                continue
+        final_ticks = np.array(final_ticks)
+        xticks = final_ticks[:, 1] + final_ticks[:, 3] > np.array(inner_plot_area[1])
+        yticks = final_ticks[:, 0] < np.array(inner_plot_area[0])
+
+        xticks_boxes = final_ticks[xticks]
+        xticks_boxes = xticks_boxes[xticks_boxes[:, 0].argsort()]
+        xticks_text = np.array(tick_texts)[xticks]
+        yticks_boxes = final_ticks[yticks]
+        xticks_boxes = xticks_boxes[xticks_boxes[:, 1].argsort()]
+        yticks_text = np.array(tick_texts)[yticks]
+
+        ## DEBUG
+        for i in range(len(xticks_boxes)):
+            cv2.rectangle(samples_, xticks_boxes[i][0:2]-xticks_boxes[i][2:]//2, xticks_boxes[i][0:2]+xticks_boxes[i][2:]//2,(0, 255, 0), 1)
+            cv2.putText(samples_, xticks_text[i], xticks_boxes[i][0:2], font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)      
+        for i in range(len(yticks_boxes)):
+            cv2.rectangle(samples_, yticks_boxes[i][0:2]-yticks_boxes[i][2:]//2, yticks_boxes[i][0:2]+yticks_boxes[i][2:]//2,(0, 255, 0), 1)
+            cv2.putText(samples_, yticks_text[i], yticks_boxes[i][0:2], font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)      
+        for box, text in zip(final_marker, final_text):
+            cv2.putText(samples_, str(text)[2:-2], box[:2].astype(np.uint32), font, fontScale, (0, 0, 0), 1, cv2.LINE_AA)    
+
+        x_text = []
+        x_coord = []
+        for text, coords in zip(xticks_text, xticks_boxes):
+            if text.isnumeric():
+                x_text.append(float(text))
+                x_coord.append(coords[0])
+        r1 = abs(x_text[1] - x_text[0])/abs(x_coord[1] - x_coord[0])
+        r2 = abs(x_text[2] - x_text[0])/abs(x_coord[1] - x_coord[0])
+        if r1/r2 > 0.9 and r1/r2 < 1.1:
+            ratio = (r1 + r2)/2
 
         '''
         - To get text box, GIoU must be > some thresh[0?] b/w:
@@ -232,7 +352,6 @@ def main(args):
         '''
 
         cv2.imwrite(output_path + image_name, samples_)
-        ctr += 1
 
 def match_text_boxes(ocr_boxes, det_boxes):
     det_boxes = torch.as_tensor(det_boxes)
@@ -240,18 +359,25 @@ def match_text_boxes(ocr_boxes, det_boxes):
     giou = box_ops.generalized_box_iou(torch.as_tensor(ocr_boxes), det_boxes)
     return giou
 
-def plot_matched_boxes(samples_, giou_matrix, ocr_boxes, det_boxes):
+def get_matched_boxes(samples_, giou_matrix, ocr_boxes, det_boxes):
     count = 0
     ocr_boxes = ocr_boxes.astype(np.uint32)
     det_boxes = torch.as_tensor(det_boxes)
     det_boxes = box_ops.box_cxcywh_to_xyxy(det_boxes)
     det_boxes = np.array(det_boxes).astype(np.uint32)
+    text_boxes = []
+    det_box_ids = []
+    ocr_box_ids = []
     while(count < min(giou_matrix.shape)):
         giou_matrix, score, ocr_idx, det_box_idx = find_max(np.array(giou_matrix))
         if score > 0:
+            text_boxes.append(ocr_boxes[ocr_idx])
+            det_box_ids.append(det_box_idx)
+            ocr_box_ids.append(ocr_idx)
             cv2.rectangle(samples_, ocr_boxes[ocr_idx][0:2], ocr_boxes[ocr_idx][2:],(0, 255, 0), 1)
             cv2.rectangle(samples_, det_boxes[det_box_idx][0:2], det_boxes[det_box_idx][2:], (0, 0, 255), 1)
         count += 1
+    return text_boxes, det_box_ids, ocr_box_ids
 
 def nms(dets, thresh):
     x1 = dets[:, 0]
@@ -287,8 +413,8 @@ from numpy import unravel_index
 def find_max(Arr):
     i, j = unravel_index(Arr.argmax(), Arr.shape)    
     max_value = Arr[i][j]        
-    Arr[i] = np.zeros((1, Arr.shape[1]))
-    Arr[:, j] = np.zeros((Arr.shape[0], ))
+    Arr[i] = -1000*np.ones((1, Arr.shape[1]))
+    Arr[:, j] = -1000*np.ones((Arr.shape[0], ))
     return Arr, max_value, i, j
 
 def plot_box(image, cls, box, w, h):

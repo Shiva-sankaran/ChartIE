@@ -1,0 +1,42 @@
+lr: 1e-4
+lr_backbone: 1e-5
+batch_size: 12
+weight_decay: 1e-4
+epochs: 300
+lr_drop: 200
+clip_max_norm: 0.1
+
+weights: _
+
+backbone: resnet50
+# dilation: store_true
+position_embedding: sine
+
+enc_layers: 6
+dec_layers: 6
+dim_feedforward: 2048
+hidden_dim: 256
+dropout: 0.1
+nheads: 8
+num_queries: 100
+# pre_norm: store_true
+
+# masks: store_true
+
+# no_aux_loss: dest aux_loss, store_false
+set_cost_class: 1
+set_cost_bbox: 5
+set_cost_giou: 2
+
+mask_loss_coef: 1
+dice_loss_coef: 1
+giou_loss_coef: 5
+eos_coef: 2
+
+coco_path: _
+dataset_file: charts
+output_dir: '/home/md.hassan/charts/detr/charts'
+device: cuda
+seed: 42
+num_workers: 2
+distributed: False

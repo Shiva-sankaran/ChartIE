@@ -27,7 +27,7 @@ cuda_id = 1
 CUDA_ = 'cuda:' + str(cuda_id)
 model = model.to(CUDA_)
 
-model_path = '/home/md.hassan/charts/s_CornerNet/legend_mapping2/ckpt/' + model_arch +'/epoch146.t7'
+model_path = '/home/md.hassan/charts/s_CornerNet/legend_mapping2/ckpt/' + model_arch +'/epoch291.t7'
 state = torch.load(model_path, map_location = 'cpu')
 model.load_state_dict(state['state_dict'])
 model = model.to(CUDA_)
