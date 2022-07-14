@@ -7,13 +7,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from util.misc import (NestedTensor, accuracy, get_world_size,
+from utils.misc import (NestedTensor, accuracy, get_world_size,
                        is_dist_avail_and_initialized)
 
 from .matcher import build_matcher
 from .transformer_vit import build_transformer_vit
 
-from util.sb_transforms import transform_preds
+from utils.sb_transforms import transform_preds
 import numpy as np
 from collections import defaultdict
 

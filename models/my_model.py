@@ -4,7 +4,7 @@ import torch, sys
 import torch.nn as nn
 from .transformer_vit import build_transformer_vit
 import torch.nn.functional as F
-from util.misc import (NestedTensor, accuracy, get_world_size,
+from utils.misc import (NestedTensor, accuracy, get_world_size,
                        is_dist_avail_and_initialized)
 
 

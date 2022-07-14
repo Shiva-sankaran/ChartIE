@@ -6,8 +6,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from util import box_ops
-from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
+from utils import box_ops
+from utils.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
 
@@ -311,7 +311,7 @@ def build(args):
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
     if args.dataset_file == "charts":
-        num_classes = 10 # ids from 0 to 9 in in chart element detection. so 9+1 taken
+        num_classes = 10 # ids from 0 to 7 in in chart element detection. so 7+1 taken
     if args.distributed:
         device = torch.device('cuda:%d' % args.local_rank)
     else:

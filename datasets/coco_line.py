@@ -17,7 +17,7 @@ import cv2
 import random
 import matplotlib.pyplot as plt
 
-from util.sb_transforms import fliplr_joints, affine_transform, get_affine_transform
+from utils.sb_transforms import fliplr_joints, affine_transform, get_affine_transform
 
 import datasets.transforms as T
 from torchvision import transforms

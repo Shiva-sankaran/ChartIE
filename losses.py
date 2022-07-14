@@ -1,7 +1,7 @@
 from numpy import delete
 import torch
 import torch.nn.functional as F
-from util.misc import (NestedTensor, accuracy, get_world_size,
+from utils.misc import (NestedTensor, accuracy, get_world_size,
                        is_dist_avail_and_initialized)
 from torch import nn
 import numpy as np

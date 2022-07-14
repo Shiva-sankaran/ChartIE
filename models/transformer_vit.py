@@ -20,7 +20,7 @@ from models import position_encoding
 from models.xcit_decoder import XCiTDec
 from models.transformer import TransformerDecoder, TransformerDecoderLayer
 from models import vision_transformer
-from util.misc import NestedTensor, load_pretrained_weights_vit
+from utils.misc import NestedTensor, load_pretrained_weights_vit
 from models.vision_transformer import trunc_normal_
 from models.position_encoding import build_position_encoding
 
